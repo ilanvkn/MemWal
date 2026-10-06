@@ -3,6 +3,45 @@ import test from "node:test";
 
 import { MemWalMock } from "../dist/index.js";
 
+test("MemWalMock recent recall returns newest matches before applying the limit", async () => {
+    const mock = MemWalMock.create();
+    await mock.rememberAndWait("project release version one");
+    await mock.rememberAndWait("project release version two");
+
+    const recent = await mock.recall({ query: "project release", sort: "recent", limit: 1 });
+    assert.equal(recent.results[0].text, "project release version two");
+    assert.equal(recent.total, 1);
+    for (const sort of [undefined, "relevance"]) {
+        const result = await mock.recall({ query: "project release", sort, limit: 1 });
+        assert.equal(result.results[0].text, "project release version one");
+    }
+});
+
+test("MemWalMock recent recall widens but bounds the semantic candidate window", async () => {
+    const mock = MemWalMock.create();
+    for (let index = 1; index <= 5; index += 1) {
+        await mock.rememberAndWait(`project release version ${index}`);
+    }
+    // This latest record is outside the five semantic candidates for limit 1.
+    await mock.rememberAndWait("unrelated holiday plans");
+    const recent = await mock.recall({ query: "project release", sort: "recent", limit: 1 });
+    assert.equal(recent.results[0].text, "project release version 5");
+});
+
+test("MemWalMock recent recall keeps namespace filtering and token budgeting", async () => {
+    const mock = MemWalMock.create();
+    await mock.rememberAndWait("project release old", "work");
+    await mock.rememberAndWait("project release current", "work");
+    await mock.rememberAndWait("project release unrelated", "other");
+    const result = await mock.recall({
+        query: "project release", namespace: "work", sort: "recent", limit: 1,
+        maxTokens: 2, truncationStrategy: "drop-tail",
+    });
+    assert.equal(result.results[0].blob_id, "mock-blob-000002");
+    assert.equal(result.results[0].text, "project ");
+    assert.equal(result.meta.tokenEstimate, 2);
+});
+
 test("MemWalMock remembers and recalls deterministically without network access", async () => {
     const originalFetch = globalThis.fetch;
     globalThis.fetch = async () => {

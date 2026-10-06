@@ -278,6 +278,9 @@ export class MemWalMock {
             throw new Error("limit must be a non-negative integer");
         }
         const queryTokens = tokenize(query);
+        const candidateLimit = options.sort === "recent"
+            ? Math.max(resolvedLimit, Math.min(resolvedLimit * 5, 50))
+            : resolvedLimit;
         const ranked = this.memories
             .filter((memory) => memory.namespace === resolvedNamespace)
             .map((memory) => ({
@@ -294,7 +297,16 @@ export class MemWalMock {
                     left.distance - right.distance ||
                     left.memory.sequence - right.memory.sequence
             )
-            .slice(0, resolvedLimit)
+            .slice(0, candidateLimit);
+        if (options.sort === "recent") {
+            // Sequence is the mock's deterministic write-time clock. Match the
+            // relayer: widen the semantic candidate set, then keep newest hits.
+            ranked.sort((left, right) =>
+                right.memory.sequence - left.memory.sequence ||
+                left.distance - right.distance
+            );
+        }
+        const selected = ranked.slice(0, resolvedLimit)
             .map(({ memory, distance: memoryDistance }) => ({
                 blob_id: memory.blobId,
                 text: memory.text,
@@ -303,7 +315,7 @@ export class MemWalMock {
 
         if (typeof options.maxTokens === "number") {
             const { results, meta } = applyTokenBudget(
-                ranked,
+                selected,
                 options.maxTokens,
                 options.truncationStrategy,
                 options.countTokens
@@ -311,7 +323,7 @@ export class MemWalMock {
             return { results, total: results.length, meta };
         }
 
-        return { results: ranked, total: ranked.length };
+        return { results: selected, total: selected.length };
     }
 
     async analyze(
